@@ -75,5 +75,5 @@
 (defmethod eval-tm ((tm tm) input &optional v)
   (let ((votes (make-array (num-rules tm) :fill-pointer 0)))
     (dotimes (rule (num-rules tm) votes)
-      (if v (format t "Rule ~a returned ~a for class ~a." rule (eval-rule (elt (rules tm) rule) input) (class-id (elt (rules tm) rule))))
+      (if v (format t "Rule ~a returned ~a for class ~a.~%" rule (eval-rule (elt (rules tm) rule) input) (class-id (elt (rules tm) rule))))
       (vector-push (eval-rule (elt (rules tm) rule) input) votes))))
