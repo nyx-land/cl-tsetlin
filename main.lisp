@@ -38,8 +38,8 @@
 		:documentation "Number of distinct classes that this Tsetlin machine will be able to observe. Should be a positive integer.")
    (num-features :initarg :num-features :initform (error "num-features not specified. Are you stupid?") :accessor num-features
 		 :documentation "Number of true-false features that this Tsetlin machine will be able to observe. Should be a positive integer.")
-   (default-specificity :initarg :def-spec :initform NIL :accessor def-spec
-			:documentation "Default specificity, or feedback rate, of this machine. If specified, should be at least 1.")
+   (def-spec :initarg :def-spec :initform 3 :accessor def-spec
+			:documentation "Default specificity, or inverse feedback rate, of this machine. If specified, should be at least 1.")
    (num-rules :initarg :num-rules :initform NIL :accessor num-rules
 	      :documentation "Number of rules in the Tsetlin machine. Should be a positive integer. If unspecified, defaults to num-classes.")
    (rules-per-class :initarg :rules-per-class :initform NIL :accessor rules-per-class
@@ -53,6 +53,9 @@
 
 
 (defmethod initialize-instance :after ((tm tm) &key)
+  ; resolve num-rules
+  (if (not (num-rules tm))
+      (setf (num-rules tm) (num-classes tm)))
   ; resolve rules-per-class
   (if (not (rules-per-class tm))
       (progn
