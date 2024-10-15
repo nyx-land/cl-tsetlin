@@ -46,6 +46,18 @@
     ; print newline at the end
     (format t "~%"))
 
+(defmethod pretty-print-memory ((rule rule))
+  ;; For each feature of a rule, display a "slider" showing the Tsetlin Automaton's memory values
+  (loop for f from 0 below (* 2 (num-features rule)) do
+    (format t "~a (Remember):" f)
+    (loop for i from 0 below (* 2 (num-states rule)) do
+      (if (= i (elt (mem rule) f))
+          (format t "*")
+          (format t "-"))    
+      (when (= i (1- (num-states rule)))
+        (format t "|")))
+    (format t ":(Forget)~%")))
+
 (defmethod eval-rule ((rule rule) input)
   (dotimes (feature (num-features rule) T)
     (if (and (> (elt (mem rule) feature) 5.5) (not (elt input feature)))
