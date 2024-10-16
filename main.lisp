@@ -60,7 +60,9 @@
 
 (defmethod eval-rule ((rule rule) input)
   (dotimes (feature (num-features rule) T)
-    (if (and (> (elt (mem rule) feature) 5.5) (not (elt input feature)))
+    (if (and (> (elt (mem rule) feature) (num-states rule)) (equal (elt input feature) 0))
+	(return-from eval-rule NIL))
+    (if (and (> (elt (mem rule) (+ feature (num-features rule))) (num-states rule)) (equal (elt input feature) 1))
 	(return-from eval-rule NIL))))
 
 (defclass tm (standard-object)
@@ -76,6 +78,8 @@
 	      :documentation "Number of rules in the Tsetlin machine. Should be a positive integer. If unspecified, defaults to num-classes.")
    (rules-per-class :initarg :rules-per-class :initform NIL :accessor rules-per-class
 		    :documentation "Collection of integers describing how many rules will cover each class. If unspecified, the rules are divided equally.")
+   (class-indices :initform NIL :accessor class-indices
+		  :documentation "Vector of indices for where in the rules list each class is. Automatically set in initialize-instance.")
    (class-names :initarg :class-names :initform NIL :accessor class-names
 		:documentation "List of class names, which get assigned in order. The list's length must be equal to num-classes. Optional to include.")
    (feature-names :initarg :feature-names :initform NIL :accessor feature-names
@@ -94,6 +98,14 @@
 	(setf (rules-per-class tm) (make-array (num-classes tm) :initial-element (floor (/ (num-rules tm) (num-classes tm)))))
 	(dotimes (remainder (mod (num-rules tm) (num-classes tm)))
 	  (incf (elt (rules-per-class tm) remainder)))))
+  ; resolve class-indices
+  (setf (class-indices tm) (make-array (num-classes tm) :initial-element 0))
+  (let ((running-count 0))
+    (dotimes (one-class (num-classes tm))
+      (if (> one-class 0)
+	  (progn
+	    (incf running-count (elt (rules-per-class tm) (1- one-class)))
+	    (setf (elt (class-indices tm) one-class) running-count)))))
   ; resolve feature-names
   (if (not (feature-names tm))
       (setf (feature-names tm) (make-array (num-features tm) :initial-contents (loop for i upto (- (num-features tm) 1) collect (write-to-string i)))))
@@ -114,7 +126,7 @@
 
 (defmethod get-class-rules ((tm tm) class-id)
   ; return vector of all rules that observe the given class-id
-  (let* ((lowest-index (loop for i upto (- class-id 1) sum (elt (rules-per-class tm) i)))
+  (let* ((lowest-index (elt (class-indices tm) class-id))
 	 (highest-index (+ lowest-index (elt (rules-per-class tm) class-id) -1)))
     ; as i said on discord, we will probably store indices in the tm object so we don't have to calculate them every time
     (make-array (elt (rules-per-class tm) class-id) :initial-contents (loop for i from lowest-index upto highest-index collect (elt (rules tm) i)))))
@@ -124,6 +136,22 @@
     (dotimes (rule (num-rules tm) votes)
       (if v (format t "Rule ~a returned ~a for class ~a.~%" rule (eval-rule (elt (rules tm) rule) input) (class-id (elt (rules tm) rule))))
       (vector-push (eval-rule (elt (rules tm) rule) input) votes))))
+
+(defmethod get-consensus ((tm tm) votelist)
+  ; Returns random class among those who have the most votes.
+  (let ((highest-vote-count 0) (top-classes nil) (current-votes 0) (rules-per-class (rules-per-class tm)) (class-indices (class-indices tm)))
+    (dotimes (one-class (length rules-per-class))
+      (dotimes (one-rule (elt rules-per-class one-class))
+	(if (elt votelist (+ (elt class-indices one-class) one-rule))
+	    (incf current-votes)))
+      (if (> current-votes highest-vote-count)
+	  (progn
+	    (setf highest-vote-count current-votes)
+	    (setf top-classes (list one-class)))
+	  (if (= current-votes highest-vote-count)
+	      (setf top-classes (append top-classes (list one-class)))))
+      (setf current-votes 0))
+    (return-from get-consensus (elt top-classes (random (length top-classes))))))
 
 (defun random-exclude (range excluded-num)
   ; return random int in [0, range-1], except for excluded-num
@@ -162,22 +190,24 @@
   (format t "~%"))
   
 
-(defmethod give-feedback ((tm tm) input-label input &optional v (spec (def-spec tm)) boost-positive)
+(defmethod give-feedback ((tm tm) input-label input &optional v spec boost-positive)
   ; counterexample stuff is currently unused, it's for the part of the feedback that isn't done yet
   (let* ((counterexample-class (random-exclude (num-classes tm) input-label))
 	 (label-rules (get-class-rules tm input-label))
 	 (counterexample-rules (get-class-rules tm counterexample-class))
-	 ; todo: make it so we don't need to calculate indices every time
-	 (label-lowest-index (loop for i upto (- input-label 1) sum (elt (rules-per-class tm) i)))
-	 (counterex-lowest-index (loop for i upto (- counterexample-class 1) sum (elt (rules-per-class tm) i))))
+	 (label-lowest-index (elt (class-indices tm) input-label))
+	 (counterex-lowest-index (elt (class-indices tm) counterexample-class)))
+    (if (not spec)
+	(setf spec (def-spec tm))) ; temporary
 				       ; type 1 feedback, part 1
     ; if a feature is present in the input, we loop through every rule matching the input's labelled class, and reward that feature's clauses with probability (s-1)/s
     (dotimes (label-rule (length label-rules))
       (dotimes (feature (num-features tm))
 	; set rand equal to random number in [0, specificity-1]. if we roll 0, then things with probability 1/s will happen. if we roll anything else, things with probability (s-1)/s will happen
 	(let ((rand (random spec))
-	      (init-clause-mem (elt (mem (elt label-rules label-rule)) feature)))
-	  (if (elt input feature)
+	      (init-clause-mem (elt (mem (elt label-rules label-rule)) feature))
+	      (init-negative-mem (elt (mem (elt label-rules label-rule)) (+ feature (num-features tm)))))
+	  (if (equal (elt input feature) 1)
 	      ; for each feature which is present in the input
 	      (progn
 		(if v
@@ -187,13 +217,99 @@
 		(if (or boost-positive (not (equal rand 0)))
 		    (if (< init-clause-mem (* 2 (num-states tm)))
 			(incf (elt (mem (elt label-rules label-rule)) feature))))
-		; todo: penalize the corresponding negative clause with probability 1 (type 2 feedback). do it inside the below parenthesis
-		)
+		; penalize the corresponding negative clause with probability 1 (type 2 feedback)
+		(if v
+		    (print-feedback feature t nil (+ label-rule label-lowest-index) 1 nil t init-negative-mem nil (<= init-negative-mem 1)))
+		(if (> init-negative-mem 1)
+		    (decf (elt (mem (elt label-rules label-rule)) (+ feature (num-features tm))))))
 	  ; for each feature which is absent in the input. this is the "else" in (if (elt input feature)) above if you're confused where we are
 	      (progn
 		(if v
 		    (print-feedback feature nil t (+ label-rule label-lowest-index) (/ 1 spec) nil (equal rand 0) init-clause-mem rand (<= init-clause-mem 1))
 		(if (equal rand 0)
 		    (if (> init-clause-mem 1)
-			(decf (elt (mem (elt label-rules label-rule)) feature))))))))))))
+			(decf (elt (mem (elt label-rules label-rule)) feature))))))))))
+    ; the second loop, for the counterexample class
+    (dotimes (counter-rule (length counterexample-rules))
+      (dotimes (feature (num-features tm))
+	(let ((rand (random spec))
+	      (init-clause-mem (elt (mem (elt counterexample-rules counter-rule)) feature))
+	      (init-negative-mem (elt (mem (elt counterexample-rules counter-rule)) (+ feature (num-features tm)))))
+	  (if (equal (elt input feature) 1)
+	      ; for each feature which is present in the input, (n-1)/n chance to reward the corresponding negative clause in the counterexample class
+	      (progn
+		(if v
+		    (print-feedback feature t nil (+ counterex-lowest-index counter-rule) (/ (1- spec) spec) t (not (equal rand 0)) init-negative-mem rand (>= init-negative-mem (* 2 (num-states tm)))))
+		(if (and (not (equal rand 0)) (< init-negative-mem (* 2 (num-states tm))))
+		    (incf (elt (mem (elt counterexample-rules counter-rule)) (+ feature (num-features tm)))))
+		; for each feature which is present in the input, guaranteed penalty for matching positive clauses in the counterexample class
+		(if v
+		    (print-feedback feature t t (+ counterex-lowest-index counter-rule) 1 nil t init-clause-mem nil (<= init-clause-mem 1)))
+		(if (> init-clause-mem 1)
+		    (decf (elt (mem (elt counterexample-rules counter-rule)) feature))))
+	      ; for each feature which is absent in the input, 1/n chance to penalize the corresponding negative clause in the counterexample class
+	      (progn
+		(if v
+		    (print-feedback feature nil nil (+ counterex-lowest-index counter-rule) (/ 1 spec) nil (equal rand 0) init-negative-mem rand (<= init-negative-mem 1)))
+		(if (and (equal rand 0) (> init-negative-mem 1))
+		    (decf (elt (mem (elt counterexample-rules counter-rule)) (+ feature (num-features tm))))))))))))
+
+(defun format-leading-zeroes (num max)
+  ; theres probably a fucked up format recipe that makes this trivial but i dont feel like looking that up rn
+  (let ((output ""))
+    (dotimes (extra-digits (- (length (write-to-string max)) (length (write-to-string num))))
+      (setf output (concatenate 'string output "0")))
+    (concatenate 'string output (write-to-string num))))
+
+(defun format-time (time-units)
+  ; convert internal time units to printed ms or s
+  (let ((s (float (/ time-units internal-time-units-per-second))))
+    (if (> s 10)
+	(concatenate 'string (write-to-string s) "s")
+	(concatenate 'string (write-to-string (* 1000 s)) "ms"))))
+    
+(defmethod train ((tm tm) input-labels input-data epochs &optional v spec boost-positive buffer-appearance-func)
+  (let* ((examples-per-epoch (floor (/ (length input-labels) epochs)))
+	(examples-per-buffer (floor (/ examples-per-epoch 20)))
+	(overall-starting-time (get-internal-real-time))
+	(inv-accuracy-sample-rate (ceiling (/ 500 examples-per-epoch))))
+    (dotimes (epoch epochs)
+      (let ((epoch-starting-time (get-internal-real-time))
+	    (epoch-correct-answers 0)
+	    (epoch-starting-example (* epoch examples-per-epoch)))
+	(if v
+	    (format t "Epoch ~a/~a: [" (format-leading-zeroes (+ 1 epoch) epochs) epochs))
+	(dotimes (example examples-per-epoch)
+	  (let ((example-index (+ epoch-starting-example example)))
+	    (give-feedback tm (elt input-labels example-index) (elt input-data example-index) nil spec boost-positive)
+	    (if v
+		(progn
+		  (if (= (mod example inv-accuracy-sample-rate))
+		      (if (= (get-consensus tm (eval-tm tm (elt input-data example-index)))
+			     (elt input-labels example-index))
+			  (incf epoch-correct-answers)))
+		  (if (= (mod example examples-per-buffer) 0)
+		      (format t "~a" (if (not buffer-appearance-func) "." (funcall buffer-appearance-func (/ example examples-per-buffer)))))))))
+	(if v
+	    (format t "] Acc: ~a% Time: ~a~%"
+		    (float (* 100 (/ epoch-correct-answers (min 500 examples-per-epoch))))
+		    (format-time (- (get-internal-real-time) epoch-starting-time))))))
+    (if v
+	(format t "~%~%Overall time usage: ~a"
+		(format-time (- (get-internal-real-time) overall-starting-time))))))
+
+(defun default-feature-gen (num-features)
+  (let ((features (make-sequence '(vector bit) num-features :initial-element 0)))
+    (dotimes (feature num-features features)
+      (if (= (random 2) 1)
+	  (setf (elt features feature) 1)))))
+
+(defun generate-data (size num-features classifying-func &optional feature-gen-func)
+  (let ((labels (make-array size :fill-pointer 0)) (data (make-array size :fill-pointer 0)))
+    (dotimes (example size (list labels data))
+      (let ((features (if feature-gen-func
+			  (funcall feature-gen-func)
+			  (default-feature-gen num-features))))
+	(vector-push features data)
+	(vector-push (funcall classifying-func features) labels)))))
     
