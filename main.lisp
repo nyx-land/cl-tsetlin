@@ -18,6 +18,7 @@
       (setf (mem rule) (make-array (* 2 (num-features rule)) :initial-element (num-states rule))))) ; initialize all values to num-states, so barely forgotten
 
 (defmethod print-rule ((rule rule) &optional (clauses-per-line 5))
+  ;; Prints a rule's memory values in human-readable format.
   (format t "This rule is for class ~a. It has ~a features.~%~%"
 	  (if (cname rule) (concatenate 'string (write-to-string (class-id rule)) ": " (cname rule)) (class-id rule))
 	  (num-features rule))
@@ -44,21 +45,22 @@
 		(write-to-string clause))
 	    (elt (mem rule) clause)))
     ; print newline at the end
-    (format t "~%"))
+  (format t "~%"))
 
 (defmethod pretty-print-memory ((rule rule))
   ;; For each feature of a rule, display a "slider" showing the Tsetlin Automaton's memory values
   (loop for f from 0 below (* 2 (num-features rule)) do
-    (format t "~a (Remember):" f)
-    (loop for i from 0 below (* 2 (num-states rule)) do
+    (format t "~a (Forget):" f)
+    (loop for i from 1 upto (* 2 (num-states rule)) do
       (if (= i (elt (mem rule) f))
           (format t "*")
           (format t "-"))    
-      (when (= i (1- (num-states rule)))
+      (when (= i (num-states rule))
         (format t "|")))
-    (format t ":(Forget)~%")))
+    (format t ":(Remember)~%")))
 
 (defmethod eval-rule ((rule rule) input)
+  ;; Evaluates a rule on a given input, returning NIL if the input conflicts with any of the rule's memorized assertions and T otherwise
   (dotimes (feature (num-features rule) T)
     (if (and (> (elt (mem rule) feature) (num-states rule)) (equal (elt input feature) 0))
 	(return-from eval-rule NIL))
@@ -66,6 +68,7 @@
 	(return-from eval-rule NIL))))
 
 (defclass tm (standard-object)
+  ;; Tsetlin machine class, which contains several rules meant to categorize inputs.
   ((num-classes :initarg :num-classes :initform (error "num-classes not specified. Are you stupid?") :accessor num-classes
 		:documentation "Number of distinct classes that this Tsetlin machine will be able to observe. Should be a positive integer.")
    (num-states :initarg :num-states :initform 5 :accessor num-states
@@ -86,6 +89,13 @@
 		  :documentation "List of feature names, which get assigned in order. The list's length must be equal to num-features. Optional.")
    (rules :initarg :rules :initform NIL :accessor rules
 	  :documentation "Rules data of this Tsetlin machine. Can be set to an initial value if you really want, but in most cases initialize-instance should handle this.")))
+
+(defmethod print-tm ((tm tm) pretty)
+  ; Prints the entire Tsetlin machine, using either pretty-print-memory or print-rule.
+  (dotimes (one-rule (num-rules tm))
+    (funcall (if pretty #'pretty-print-memory #'print-rule)
+	     (elt (rules tm) one-rule))
+    (format t "~%")))
 
 
 (defmethod initialize-instance :after ((tm tm) &key)
@@ -125,42 +135,45 @@
 			 (rules tm)))))))
 
 (defmethod get-class-rules ((tm tm) class-id)
-  ; return vector of all rules that observe the given class-id
+  ;; return vector of all rules that observe the given class-id
   (let* ((lowest-index (elt (class-indices tm) class-id))
 	 (highest-index (+ lowest-index (elt (rules-per-class tm) class-id) -1)))
-    ; as i said on discord, we will probably store indices in the tm object so we don't have to calculate them every time
     (make-array (elt (rules-per-class tm) class-id) :initial-contents (loop for i from lowest-index upto highest-index collect (elt (rules tm) i)))))
 
 (defmethod eval-tm ((tm tm) input &optional v)
+  ;; Returns a vector of votes, one for each of this machine's rules.
   (let ((votes (make-array (num-rules tm) :fill-pointer 0)))
     (dotimes (rule (num-rules tm) votes)
       (if v (format t "Rule ~a returned ~a for class ~a.~%" rule (eval-rule (elt (rules tm) rule) input) (class-id (elt (rules tm) rule))))
       (vector-push (eval-rule (elt (rules tm) rule) input) votes))))
 
 (defmethod get-consensus ((tm tm) votelist)
-  ; Returns random class among those who have the most votes.
+  ;; Returns random class among those who have the most votes.
   (let ((highest-vote-count 0) (top-classes nil) (current-votes 0) (rules-per-class (rules-per-class tm)) (class-indices (class-indices tm)))
     (dotimes (one-class (length rules-per-class))
       (dotimes (one-rule (elt rules-per-class one-class))
 	(if (elt votelist (+ (elt class-indices one-class) one-rule))
 	    (incf current-votes)))
       (if (> current-votes highest-vote-count)
+	  ; new highest vote count, erase all previous top-classes
 	  (progn
 	    (setf highest-vote-count current-votes)
 	    (setf top-classes (list one-class)))
+	  ; tie with highest vote count, add this class to top-classes
 	  (if (= current-votes highest-vote-count)
 	      (setf top-classes (append top-classes (list one-class)))))
       (setf current-votes 0))
     (return-from get-consensus (elt top-classes (random (length top-classes))))))
 
 (defun random-exclude (range excluded-num)
-  ; return random int in [0, range-1], except for excluded-num
+  ;; Return random int in [0, range-1], except for excluded-num
   (let ((num (random (1- range))))
     (if (equal num excluded-num)
 	(1- range)
 	num)))
 
 (defun print-feedback (feature-num feature-present clause-polarity rule-num probability feedback-polarity feedback-success initial-clause-mem &optional roll clause-at-limit)
+  ;; Prints explanatory details about given feedback based on a lot of details. Doesn't do any of the actual feedback itself.
   (format t "Feature ~a was ~a in the input, so the corresponding ~a clause in rule ~a may be ~a with prob. ~a.~%"
 	  (write-to-string feature-num)
 	  (if feature-present "present" "absent")
@@ -191,7 +204,7 @@
   
 
 (defmethod give-feedback ((tm tm) input-label input &optional v spec boost-positive)
-  ; counterexample stuff is currently unused, it's for the part of the feedback that isn't done yet
+  ;; Gives feedback to a Tsetlin machine based on a given labeled input. Many of the machine's rules will have their memory values modified.
   (let* ((counterexample-class (random-exclude (num-classes tm) input-label))
 	 (label-rules (get-class-rules tm input-label))
 	 (counterexample-rules (get-class-rules tm counterexample-class))
@@ -229,7 +242,7 @@
 		(if (equal rand 0)
 		    (if (> init-clause-mem 1)
 			(decf (elt (mem (elt label-rules label-rule)) feature))))))))))
-    ; the second loop, for the counterexample class
+    ; the second loop, for the counterexample class. this class is one of the non-present ones, which is randomly selected
     (dotimes (counter-rule (length counterexample-rules))
       (dotimes (feature (num-features tm))
 	(let ((rand (random spec))
@@ -255,6 +268,7 @@
 		    (decf (elt (mem (elt counterexample-rules counter-rule)) (+ feature (num-features tm))))))))))))
 
 (defun format-leading-zeroes (num max)
+  ;; Turns num into a string, and adds leading zeroes to it to make it the same length as max.
   ; theres probably a fucked up format recipe that makes this trivial but i dont feel like looking that up rn
   (let ((output ""))
     (dotimes (extra-digits (- (length (write-to-string max)) (length (write-to-string num))))
@@ -262,54 +276,97 @@
     (concatenate 'string output (write-to-string num))))
 
 (defun format-time (time-units)
-  ; convert internal time units to printed ms or s
+  ; Converts internal time units to printed ms or s.
   (let ((s (float (/ time-units internal-time-units-per-second))))
     (if (> s 10)
 	(concatenate 'string (write-to-string s) "s")
 	(concatenate 'string (write-to-string (* 1000 s)) "ms"))))
-    
-(defmethod train ((tm tm) input-labels input-data epochs &optional v spec boost-positive buffer-appearance-func)
-  (let* ((examples-per-epoch (floor (/ (length input-labels) epochs)))
-	(examples-per-buffer (floor (/ examples-per-epoch 20)))
-	(overall-starting-time (get-internal-real-time))
-	(inv-accuracy-sample-rate (ceiling (/ 500 examples-per-epoch))))
-    (dotimes (epoch epochs)
-      (let ((epoch-starting-time (get-internal-real-time))
-	    (epoch-correct-answers 0)
-	    (epoch-starting-example (* epoch examples-per-epoch)))
-	(if v
-	    (format t "Epoch ~a/~a: [" (format-leading-zeroes (+ 1 epoch) epochs) epochs))
-	(dotimes (example examples-per-epoch)
-	  (let ((example-index (+ epoch-starting-example example)))
-	    (give-feedback tm (elt input-labels example-index) (elt input-data example-index) nil spec boost-positive)
-	    (if v
-		(progn
-		  (if (= (mod example inv-accuracy-sample-rate))
-		      (if (= (get-consensus tm (eval-tm tm (elt input-data example-index)))
+
+(defmethod one-epoch ((tm tm) input-labels input-data epoch-num epochs start-index num-examples inv-accuracy-sample-rate &optional v spec boost-positive (bar-appearance "....................") (epoch-starting-time (get-internal-real-time)) no-feedback)
+  ;; Handles a single training epoch. This isn't much more complicated than running give-feedback on every example, so most of the code here is dedicated to print statements.
+  (let ((epoch-correct-answers 0)
+	(examples-per-char (max (floor (/ num-examples (length bar-appearance))) 1)))
+    ; v is a number here rather than a boolean. this is done because train-distinct technically calls one-epoch twice for each epoch (one training, one testing), so we need a way to control which statements we want to print. this is kind of stupid but one-epoch should never directly be called so whatever.
+    (if (equal v 1)
+	(format t "Epoch ~a/~a: [" (format-leading-zeroes (+ 1 epoch-num) epochs) epochs))
+    (dotimes (example num-examples)
+      (let ((example-index (+ start-index example)))
+	(if (not no-feedback)
+	    (give-feedback tm (elt input-labels example-index) (elt input-data example-index) nil spec boost-positive))
+	(if (> v 0)
+	    (progn
+	      (if (equal (mod example inv-accuracy-sample-rate) 0)
+		  (if (equal (get-consensus tm (eval-tm tm (elt input-data example-index)))
 			     (elt input-labels example-index))
-			  (incf epoch-correct-answers)))
-		  (if (= (mod example examples-per-buffer) 0)
-		      (format t "~a" (if (not buffer-appearance-func) "." (funcall buffer-appearance-func (/ example examples-per-buffer)))))))))
-	(if v
-	    (format t "] Acc: ~a% Time: ~a~%"
-		    (float (* 100 (/ epoch-correct-answers (min 500 examples-per-epoch))))
-		    (format-time (- (get-internal-real-time) epoch-starting-time))))))
+		      (incf epoch-correct-answers)))
+	      (if (and (equal (mod example examples-per-char) 0) (< (/ example examples-per-char) (length bar-appearance)))
+		  ; TODO: once the progress bar actually works i will change this comment to "we got customizable progress bars up in here. you won't find this in any other implementation"
+		  (format t (subseq bar-appearance (/ example examples-per-char) (1+ (/ example examples-per-char)))))))))
+	(if (>= v 1)
+	    (format t "] Acc: ~a%~a Time: ~a"
+		    (float (* 100 (/ epoch-correct-answers (min 500 num-examples))))
+		    (concatenate 'string (loop for i upto (- 6 (length (write-to-string (float (* 100 (/ epoch-correct-answers (min 500 num-examples))))))) collect #\ ))
+		    (format-time (- (get-internal-real-time) epoch-starting-time))))
+    (if (>= v 1) (format t "~%"))))
+    
+(defmethod train ((tm tm) input-labels input-data epochs &optional v spec boost-positive (bar-appearance "...................."))
+  ;; Runs add-feedback on tm for every input in the labels and data. Setting v to true adds helpful accuracy and time trackers.
+  (let* ((examples-per-epoch (floor (/ (length input-labels) epochs)))
+	(overall-starting-time (get-internal-real-time))
+	(inv-accuracy-sample-rate (ceiling (/ examples-per-epoch 500))))
+    (dotimes (epoch epochs)
+      (one-epoch tm input-labels input-data epoch epochs (* epoch examples-per-epoch) examples-per-epoch inv-accuracy-sample-rate (if v 1) spec boost-positive bar-appearance))
     (if v
-	(format t "~%~%Overall time usage: ~a"
+	(format t "~%~a examples in ~a"
+		(write-to-string (* examples-per-epoch epochs))
 		(format-time (- (get-internal-real-time) overall-starting-time))))))
 
+(defmethod train-distinct ((tm tm) input-labels input-data epochs &optional (test-proportion 0.2) v spec boost-positive (bar-appearance "...................."))
+  ;; Like train, but reserves a chunk of the input data for "testing". The machine will be able to learn only on the unreserved data.
+  (let* ((test-cutoff (- (length input-labels) (floor (* (length input-labels) test-proportion))))
+	 (testing-per-epoch (floor (/ (- (length input-labels) test-cutoff) epochs)))
+	 (training-per-epoch (floor (/ test-cutoff epochs)))
+	 (overall-starting-time (get-internal-real-time)))
+    (dotimes (epoch epochs)
+      (let ((train-starting-index (* training-per-epoch epoch))
+	    (test-starting-index (+ test-cutoff (* testing-per-epoch epoch)))
+	    (epoch-starting-time (get-internal-real-time)))
+	(if v
+	    (format t "Epoch ~a/~a: [" (1+ epoch) epochs))
+	(one-epoch tm input-labels input-data epoch epochs train-starting-index training-per-epoch 4 (if v 0.5) spec boost-positive (subseq bar-appearance 0 (floor (* (- 1 test-proportion) (length bar-appearance)))))
+	(if v
+	    (format t "|"))
+	(one-epoch tm input-labels input-data epoch epochs test-starting-index testing-per-epoch 1 (if v 1.5) spec boost-positive (subseq bar-appearance (floor (* (- 1 test-proportion) (length bar-appearance)))) epoch-starting-time)))
+    (if v
+	(format t "~%~a examples in ~a"
+		(write-to-string (* (+ testing-per-epoch training-per-epoch) epochs))
+		(format-time (- (get-internal-real-time) overall-starting-time))))))
+	
+
 (defun default-feature-gen (num-features)
+  ;; Generates a random bit vector with length num-features, representing a single example.
   (let ((features (make-sequence '(vector bit) num-features :initial-element 0)))
     (dotimes (feature num-features features)
       (if (= (random 2) 1)
 	  (setf (elt features feature) 1)))))
 
 (defun generate-data (size num-features classifying-func &optional feature-gen-func)
+  ;; First generates a vector of bit-vectors representing all the examples using either default-feature-gen or an optional user-provided function. Then, labels these examples using classifying-func, a user-provided function that takes in a bit vector and returns a label value. Returns a list of the label vector and the data vector.
   (let ((labels (make-array size :fill-pointer 0)) (data (make-array size :fill-pointer 0)))
     (dotimes (example size (list labels data))
+      ; if we have a feature-gen-func, call that with num-features as the argument, otherwise call default-feature-gen with num-features
       (let ((features (if feature-gen-func
-			  (funcall feature-gen-func)
+			  (funcall feature-gen-func num-features)
 			  (default-feature-gen num-features))))
 	(vector-push features data)
+	; call classifying-func on this example, push the result to labels
 	(vector-push (funcall classifying-func features) labels)))))
-    
+
+(defun print-data (label-vector data-vector &optional (num-data 10) (data-per-line 5))
+  ;; Prints a human-readable sample of training data.
+  (dotimes (one-data num-data)
+    (if (equal (mod one-data data-per-line) 0)
+	(format t "~%"))
+    (format t "~a ~a | "
+	    (elt label-vector one-data)
+	    (elt data-vector one-data))))
