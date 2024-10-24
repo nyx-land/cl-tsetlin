@@ -90,7 +90,52 @@
   (train link-tm (elt link-data 0) (elt link-data 1) 10 t))
 
 (defun run-llink-test ()
-  ;; Runs the lowest link test. Scores about 40%.
+  ;; Runs the lowest link test. Scores about 40%. The lowest link test is like the regular link test, except instead of the dedicated link-generator (which always produces only one link), it uses the default feature gen, so you can have many possible links.
   (defparameter llink-tm (make-instance 'tm :num-classes 10 :num-features 10 :num-rules 20))
   (defparameter llink-data (generate-data 10000 10 #'link-categorizer))
   (train llink-tm (elt llink-data 0) (elt llink-data 1) 10 t))
+
+(defun bw-pixel-to-bit (input &optional (threshold 63))
+  (if (> input threshold) 1 0))
+
+(defun images-file-to-array (filename &optional (etype '(unsigned-byte 8)) (pixel-to-bit-func #'bw-pixel-to-bit))
+  ;; Takes in a file path and returns a data vector of bit vectors.
+  (let ((filestream (open filename :element-type etype)))
+    ; first two bytes are 0, third is data type
+    (read-byte filestream)
+    (read-byte filestream)
+    (read-byte filestream)
+    ; get dimension sizes
+    (let ((dim-count (read-byte filestream)) (dim-sizes))
+      (dotimes (dimension dim-count)
+        (let ((dim-size 0))
+          (dotimes (dim-byte 4)
+            (setf (ldb (byte 8 (* 8 (- 3 dim-byte))) dim-size) (read-byte filestream)))
+          (setf dim-sizes (append dim-sizes (list dim-size)))))
+      ; data starts here
+      ; flatten input
+      (let ((data-array (make-array (car dim-sizes) :fill-pointer 0)))
+        ; read data
+        (dotimes (img (car dim-sizes) data-array)
+	  (let ((example-bv (make-sequence '(vector bit) (reduce #'* (cdr dim-sizes)))))
+	    (dotimes (data-bit (reduce #'* (cdr dim-sizes)))
+	      (setf (elt example-bv data-bit) (funcall pixel-to-bit-func (read-byte filestream))))
+	    (vector-push example-bv data-array)))))))
+
+(defun labels-file-to-array (filename &optional (etype '(unsigned-byte 8)))
+  ;; Takes in a file path and returns a vector of labels.
+  (let ((filestream (open filename :element-type etype)))
+    (read-byte filestream)
+    (read-byte filestream)
+    (read-byte filestream)
+    ; one dimension, so we won't bother reading it
+    (read-byte filestream)
+    (let ((size 0))
+      (dotimes (dim-byte 4)
+        (setf (ldb (byte 8 (* 8 (- 3 dim-byte))) size) (read-byte filestream)))
+      ; data starts here
+      (let ((data-array (make-array size :fill-pointer 0)))
+        ; read data
+        (dotimes (img size data-array)
+          (vector-push (read-byte filestream) data-array))))))
+
