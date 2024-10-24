@@ -300,13 +300,15 @@
 			     (elt input-labels example-index))
 		      (incf epoch-correct-answers)))
 	      (if (and (equal (mod example examples-per-char) 0) (< (/ example examples-per-char) (length bar-appearance)))
-		  ; TODO: once the progress bar actually works i will change this comment to "we got customizable progress bars up in here. you won't find this in any other implementation"
-		  (format t (subseq bar-appearance (/ example examples-per-char) (1+ (/ example examples-per-char)))))))))
-	(if (>= v 1)
-	    (format t "] Acc: ~a%~a Time: ~a"
-		    (float (* 100 (/ epoch-correct-answers (min 500 num-examples))))
-		    (concatenate 'string (loop for i upto (- 6 (length (write-to-string (float (* 100 (/ epoch-correct-answers (min 500 num-examples))))))) collect #\ ))
-		    (format-time (- (get-internal-real-time) epoch-starting-time))))
+		  ; we got customizable progress bars up in here. you won't find this in any other implementation
+		  (progn
+		    (format t (subseq bar-appearance (/ example examples-per-char) (1+ (/ example examples-per-char))))
+		    (finish-output)))))))
+    (if (>= v 1)
+	(format t "] Acc: ~a%~a Time: ~a"
+		(float (* 100 (/ epoch-correct-answers (min 500 num-examples))))
+		(concatenate 'string (loop for i upto (- 6 (length (write-to-string (float (* 100 (/ epoch-correct-answers (min 500 num-examples))))))) collect #\ ))
+		(format-time (- (get-internal-real-time) epoch-starting-time))))
     (if (>= v 1) (format t "~%"))))
     
 (defmethod train ((tm tm) input-labels input-data epochs &optional v spec boost-positive (bar-appearance "...................."))
@@ -362,11 +364,22 @@
 	; call classifying-func on this example, push the result to labels
 	(vector-push (funcall classifying-func features) labels)))))
 
-(defun print-data (label-vector data-vector &optional (num-data 10) (data-per-line 5))
+(defun print-data (label-vector data-vector &optional (num-data 10) (data-per-line 5) (starting-index 0))
   ;; Prints a human-readable sample of training data.
   (dotimes (one-data num-data)
     (if (equal (mod one-data data-per-line) 0)
 	(format t "~%"))
     (format t "~a ~a | "
-	    (elt label-vector one-data)
-	    (elt data-vector one-data))))
+	    (elt label-vector (+ one-data starting-index))
+	    (elt data-vector (+ one-data starting-index)))))
+
+(defun print-data-rectangle (label-vector data-vector &optional (num-data 10) width (starting-index 0))
+  (let* ((size (length (elt data-vector 0)))
+	(width (if (not width) (floor (sqrt size))))
+	(height (floor (/ size width))))
+    (dotimes (one-example num-data)
+      (dotimes (line height)
+	(format t "~%")
+	(dotimes (one-bit width)
+	  (format t (if (= 1 (elt (elt data-vector (+ starting-index one-example)) (+ (* width line) one-bit))) "#" "."))))
+      (format t " (~a)~%~%" (write-to-string (elt label-vector (+ starting-index one-example)))))))
