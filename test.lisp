@@ -68,7 +68,10 @@
   (defparameter link-tm nil)
   (defparameter link-data nil)
   (defparameter llink-tm nil)
-  (defparameter llink-data nil))
+  (defparameter llink-data nil)
+  (defparameter mnist-tm nil)
+  (defparameter mnist-labels nil)
+  (defparameter mnist-images nil))
 
 (defun run-xor-test ()
   ;; Runs the xor test. Uses defparameter so the user can play with the machine and data afterward if they want.
@@ -95,7 +98,7 @@
   (defparameter llink-data (generate-data 10000 10 #'link-categorizer))
   (train llink-tm (elt llink-data 0) (elt llink-data 1) 10 t))
 
-(defun bw-pixel-to-bit (input &optional (threshold 63))
+(defun bw-pixel-to-bit (input &optional (threshold 127))
   (if (> input threshold) 1 0))
 
 (defun images-file-to-array (filename &optional (etype '(unsigned-byte 8)) (pixel-to-bit-func #'bw-pixel-to-bit))
@@ -139,3 +142,8 @@
         (dotimes (img size data-array)
           (vector-push (read-byte filestream) data-array))))))
 
+(defun run-mnist-test (labels-filename images-filename)
+  (defparameter mnist-labels (labels-file-to-array labels-filename))
+  (defparameter mnist-images (images-file-to-array images-filename))
+  (defparameter mnist-tm (make-instance 'tm :num-classes 10 :num-features 784 :num-rules 40))
+  (train mnist-tm mnist-labels mnist-images 10 t))
