@@ -59,6 +59,21 @@
         (format t "|")))
     (format t ":(Remember)~%")))
 
+(defmethod print-rule-rectangle ((rule rule) &optional width (inc "#") (exc "|") (inert "."))
+  ;;
+  (format t "This rule is for class ~a.~%" (class-id rule))
+  (format t "~a must be present, ~a must be absent, and ~a can be either value.~%" inc exc inert)
+  (let* ((size (num-features rule))
+	 (width (if (not width) (floor (sqrt size))))
+	 (height (floor (/ size width))))
+    (dotimes (line height)
+      (dotimes (f width)
+	(let ((feature-index (+ (* line width) f)))
+	  (format t "~a"
+		  (if (> (elt (mem rule) feature-index) (num-states rule)) inc
+		      (if (> (elt (mem rule) (+ feature-index size)) (num-states rule)) exc inert)))))
+      (format t "~%"))))
+
 (defmethod eval-rule ((rule rule) input)
   ;; Evaluates a rule on a given input, returning NIL if the input conflicts with any of the rule's memorized assertions and T otherwise
   (dotimes (feature (num-features rule) T)
@@ -373,13 +388,54 @@
 	    (elt label-vector (+ one-data starting-index))
 	    (elt data-vector (+ one-data starting-index)))))
 
-(defun print-data-rectangle (label-vector data-vector &optional (num-data 10) width (starting-index 0))
+(defun print-data-rectangle (label-vector data-vector &optional num-data width (starting-index 0))
   (let* ((size (length (elt data-vector 0)))
-	(width (if (not width) (floor (sqrt size))))
-	(height (floor (/ size width))))
+	 (width (if (not width) (floor (sqrt size)) width))
+	 (height (floor (/ size width)))
+	 (num-data (min (length data-vector) (if num-data num-data 10))))
     (dotimes (one-example num-data)
       (dotimes (line height)
 	(format t "~%")
 	(dotimes (one-bit width)
 	  (format t (if (= 1 (elt (elt data-vector (+ starting-index one-example)) (+ (* width line) one-bit))) "#" "."))))
       (format t " (~a)~%~%" (write-to-string (elt label-vector (+ starting-index one-example)))))))
+
+(defun to-base-list (num base-list)
+  ;; Converts a number to a specified base list. For instance, (to-base-list (35 '(5 4 3))) will return (2 3 2), because 2*(4*3) + 3*(3) + 2 = 35.
+  (if (not (cdr base-list)) (list num)
+      (let ((divisor (reduce #'* (cdr base-list))))
+      (append (list (floor (/ num divisor))) (to-base-list (mod num divisor) (cdr base-list))))))
+
+(defun from-base-list (num-list base-list)
+  ;; Returns an output from to-base-list back to base 10.
+  (if (not (cdr num-list)) (car num-list)
+      (+ (from-base-list (cdr num-list) (cdr base-list)) (* (car num-list) (reduce #'* (cdr base-list))))))
+
+(defun convolution (img-bit-vector dimensions &optional (convs-per-dimension 2) (granularity 1))
+  ;; Takes in a single bit vector representing an image (or higher-dimensional input), and outputs a vector of bit vectors representing smaller sections within that image.
+  (let* ((conv-radius (/ 1 convs-per-dimension))
+	 (num-dimensions (length dimensions))
+	 (grains-per-dimension (1+ (* (1- (ceiling (/ 1.0 conv-radius))) granularity))) ; a "grain" is a starting point in space for an output to be created. in other words, for every grain, there will be an output created. by default, you get convs-per-dimension ^ num-dimensions grains, but this can be increased by increasing granularity.
+	 (output-length (expt grains-per-dimension num-dimensions))
+	 (output (make-array output-length :fill-pointer 0))
+	 (bit-radius-dimensions (loop for dim below num-dimensions collect (floor (* (elt dimensions dim) conv-radius)))) ; dimensions of each output
+	 (bits-per-grain (loop for dim below num-dimensions collect (floor (* (- 1 conv-radius) (/ (elt dimensions dim) (1- grains-per-dimension)))))) ; dimensions of distance between each grain. relevant because if we are working with e.g. a rectangular image, then a horizontal grain and vertical grain may be different lengths
+	 (output-image-size (reduce #'* bit-radius-dimensions)) ; total number of bits in the output
+	 (thermometer-size (* (1- grains-per-dimension) num-dimensions))
+	 (last-img-dimension (car (last dimensions)))
+	 (last-output-dimension (car (last bit-radius-dimensions))))
+    (dotimes (one-output output-length output) ; for each output bit vector
+      (let* ((this-output (make-sequence '(vector bit) (+ output-image-size thermometer-size)))
+	     (current-lens (to-base-list one-output (loop for i below (length dimensions) collect grains-per-dimension))) ; the current lens will be essentially a measure of which grain we're looking at for this output. for example if we have a 2d image with conv-radius 0.5 and granularity 1, current-lens will be '(0 0) for the first output, then '(0 1), '(1 0), and finally '(1 1).
+	     (current-location (map 'list #'* current-lens bits-per-grain))) ; current-location is like current-lens, but it's made of pixel coordinates for where the top left of the lens is
+	(dotimes (one-line last-output-dimension)
+	  (let ((starting-img-index (from-base-list (map 'list #'+ current-location (to-base-list (* one-line last-img-dimension) dimensions)) dimensions)) ; begin at current-location, then convert one-line to a base-list, which we read as a list of directions leading us to the start of a line. we start from here, read a line, and move to the next line
+		(starting-output-index (* one-line last-output-dimension))) ; the start of the location in the output vector that we're writing
+	    (dotimes (one-bit last-output-dimension)
+	      ; read each bit from the input bit vector and write it to the output bit vector
+	      (setf (elt this-output (+ starting-output-index one-bit)) (elt img-bit-vector (+ starting-img-index one-bit))))))
+	; image section has been fully transcribed, now write the thermometer (see "thermometer encoding" in chapter 4 of granmo's book)
+	(dotimes (one-dim-indicator num-dimensions)
+	  (dotimes (one-positive-bit (elt current-lens one-dim-indicator))
+	    (setf (elt this-output (+ output-image-size (* one-dim-indicator (1- grains-per-dimension)) one-positive-bit)) 1)))
+	(vector-push this-output output)))))
