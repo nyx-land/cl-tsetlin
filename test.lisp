@@ -71,7 +71,13 @@
   (defparameter llink-data nil)
   (defparameter mnist-tm nil)
   (defparameter mnist-labels nil)
-  (defparameter mnist-images nil))
+  (defparameter mnist-images nil)
+  (defparameter convs-per-dimension nil)
+  (defparameter granularity nil)
+  (defparameter outputs-per-convolution nil)
+  (defparameter mnist-conv-tm nil)
+  (defparameter mnist-conv-labels nil)
+  (defparameter mnist-conv-images nil))
 
 (defun run-xor-test ()
   ;; Runs the xor test. Uses defparameter so the user can play with the machine and data afterward if they want.
@@ -143,7 +149,29 @@
           (vector-push (read-byte filestream) data-array))))))
 
 (defun run-mnist-test (labels-filename images-filename)
+  ;; Runs the MNIST handwritten digits test. Currently scores only slightly higher than random (10%).
   (defparameter mnist-labels (labels-file-to-array labels-filename))
   (defparameter mnist-images (images-file-to-array images-filename))
   (defparameter mnist-tm (make-instance 'tm :num-classes 10 :num-features 784 :num-rules 40))
   (train mnist-tm mnist-labels mnist-images 10 t))
+
+(defun run-mnist-conv-test (labels-filename images-filename)
+  ;; Runs the MNIST handwritten digits test, but with convolution added. Currently scores slightly higher than random.
+  (defparameter convs-per-dimension 3)
+  (defparameter granularity 2)
+  (defparameter outputs-per-convolution (expt (1+ (* (1- convs-per-dimension) granularity)) 2))
+  (defparameter mnist-labels (labels-file-to-array labels-filename))
+  (defparameter mnist-images (images-file-to-array images-filename))
+  (defparameter mnist-conv-labels (make-array (* outputs-per-convolution (length mnist-labels)) :fill-pointer 0))
+  (defparameter mnist-conv-images (make-array (* outputs-per-convolution (length mnist-images)) :fill-pointer 0))
+  (defparameter mnist-conv-tm (make-instance 'tm
+					     :num-rules 40
+					     :num-features (floor (+ (expt (floor (/ 28 convs-per-dimension)) 2) (* 2 (1- (sqrt outputs-per-convolution)))))
+					     :num-classes 10
+					     :def-spec 10))
+  (dotimes (one-image (length mnist-images))
+    (let ((conv-vector (convolution (elt mnist-images one-image) '(28 28) 3 2)))
+      (dotimes (one-output outputs-per-convolution)
+	(vector-push (elt mnist-labels one-image) mnist-conv-labels)
+	(vector-push (elt conv-vector one-output) mnist-conv-images))))
+  (train mnist-conv-tm mnist-conv-labels mnist-conv-images 10 t))
