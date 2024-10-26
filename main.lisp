@@ -64,7 +64,7 @@
   (format t "This rule is for class ~a.~%" (class-id rule))
   (format t "~a must be present, ~a must be absent, and ~a can be either value.~%" inc exc inert)
   (let* ((size (num-features rule))
-	 (width (if (not width) (floor (sqrt size))))
+	 (width (if (not width) (floor (sqrt size)) width))
 	 (height (floor (/ size width))))
     (dotimes (line height)
       (dotimes (f width)
@@ -415,7 +415,7 @@
   ;; Takes in a single bit vector representing an image (or higher-dimensional input), and outputs a vector of bit vectors representing smaller sections within that image.
   (let* ((conv-radius (/ 1 convs-per-dimension))
 	 (num-dimensions (length dimensions))
-	 (grains-per-dimension (1+ (* (1- (ceiling (/ 1.0 conv-radius))) granularity))) ; a "grain" is a starting point in space for an output to be created. in other words, for every grain, there will be an output created. by default, you get convs-per-dimension ^ num-dimensions grains, but this can be increased by increasing granularity.
+	 (grains-per-dimension (1+ (* (1- convs-per-dimension) granularity))) ; a "grain" is a starting point in space for an output to be created. in other words, for every grain, there will be an output created. by default, you get convs-per-dimension ^ num-dimensions grains, but this can be increased by increasing granularity.
 	 (output-length (expt grains-per-dimension num-dimensions))
 	 (output (make-array output-length :fill-pointer 0))
 	 (bit-radius-dimensions (loop for dim below num-dimensions collect (floor (* (elt dimensions dim) conv-radius)))) ; dimensions of each output
@@ -439,3 +439,14 @@
 	  (dotimes (one-positive-bit (elt current-lens one-dim-indicator))
 	    (setf (elt this-output (+ output-image-size (* one-dim-indicator (1- grains-per-dimension)) one-positive-bit)) 1)))
 	(vector-push this-output output)))))
+
+(defun shuffle-two-sequences (first-seq second-seq)
+  ;; Randomly shuffles two sequences in the same way.
+  (let ((rng))
+    (loop for i from (length first-seq) downto 2 do
+					       (progn (setf rng (random i))
+						      (rotatef (elt first-seq rng) (elt first-seq (1- i)))
+						      (rotatef (elt second-seq rng) (elt second-seq (1- i)))
+						      (if (= (mod i 10000) 0)
+							  (format t "~a elements left.~%" (write-to-string i)))))
+    (list first-seq second-seq)))
