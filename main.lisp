@@ -59,15 +59,31 @@
         (format t "|")))
     (format t ":(Remember)~%")))
 
+(defun print-data-rectangle (label-vector data-vector &optional num-data width (starting-index 0))
+  (let* ((size (length (elt data-vector 0)))
+	 (width (if (not width) (floor (sqrt size)) width))
+	 (height (ceiling (/ size width)))
+	 (num-data (min (length data-vector) (if num-data num-data 10))))
+    (dotimes (one-example num-data)
+      (dotimes (line height)
+	(format t "~%")
+	(dotimes (one-bit (if (and (equal line (1- height)) (> (mod size width) 0))
+			      (mod size width)
+			      width))
+	  (format t (if (= 1 (elt (elt data-vector (+ starting-index one-example)) (+ (* width line) one-bit))) "#" "."))))
+      (format t " (~a)~%~%" (write-to-string (elt label-vector (+ starting-index one-example)))))))
+
 (defmethod print-rule-rectangle ((rule rule) &optional width (inc "#") (exc "|") (inert "."))
   ;;
   (format t "This rule is for class ~a.~%" (class-id rule))
   (format t "~a must be present, ~a must be absent, and ~a can be either value.~%" inc exc inert)
   (let* ((size (num-features rule))
 	 (width (if (not width) (floor (sqrt size)) width))
-	 (height (floor (/ size width))))
+	 (height (ceiling (/ size width))))
     (dotimes (line height)
-      (dotimes (f width)
+      (dotimes (f (if (and (equal line (1- height)) (> (mod size width) 0))
+		      (mod size width)
+		      width))
 	(let ((feature-index (+ (* line width) f)))
 	  (format t "~a"
 		  (if (> (elt (mem rule) feature-index) (num-states rule)) inc
@@ -155,12 +171,32 @@
 	 (highest-index (+ lowest-index (elt (rules-per-class tm) class-id) -1)))
     (make-array (elt (rules-per-class tm) class-id) :initial-contents (loop for i from lowest-index upto highest-index collect (elt (rules tm) i)))))
 
+(defmethod eval-tm-conv ((tm tm) conv-input &optional v)
+  ;; Returns a vector of votes on a convolutional input.
+  (let ((votes (make-array (num-rules tm) :initial-element NIL)))
+    (dotimes (conv-image (length conv-input) votes)
+      (if v (print-data-rectangle #("Unknown") (subseq conv-input conv-image (1+ conv-image)) 1))
+      (dotimes (rule (num-rules tm))
+	(if v (format t "Rule ~a returned ~a for class ~a.~%" rule (eval-rule (elt (rules tm) rule) (elt conv-input conv-image)) (class-id (elt (rules tm) rule))))
+	(if (eval-rule (elt (rules tm) rule) (elt conv-input conv-image))
+	    (setf (elt votes rule) T))))))
+
 (defmethod eval-tm ((tm tm) input &optional v)
   ;; Returns a vector of votes, one for each of this machine's rules.
-  (let ((votes (make-array (num-rules tm) :fill-pointer 0)))
-    (dotimes (rule (num-rules tm) votes)
-      (if v (format t "Rule ~a returned ~a for class ~a.~%" rule (eval-rule (elt (rules tm) rule) input) (class-id (elt (rules tm) rule))))
-      (vector-push (eval-rule (elt (rules tm) rule) input) votes))))
+  (if (not (equal (type-of input) `(simple-bit-vector ,(length input))))
+      (eval-tm-conv tm input v)
+      (let ((votes (make-array (num-rules tm) :fill-pointer 0)))
+	(dotimes (rule (num-rules tm) votes)
+	  (if v (format t "Rule ~a returned ~a for class ~a.~%" rule (eval-rule (elt (rules tm) rule) input) (class-id (elt (rules tm) rule))))
+	  (vector-push (eval-rule (elt (rules tm) rule) input) votes)))))
+
+(defmethod count-votes ((tm tm) votelist)
+  ;; Returns a vector of number of votes for each class.
+  (let ((votecounts (make-array (num-classes tm) :initial-element 0)) (rules-per-class (rules-per-class tm)) (class-indices (class-indices tm)))
+    (dotimes (one-class (length rules-per-class) votecounts)
+      (dotimes (one-rule (elt rules-per-class one-class))
+	(if (elt votelist (+ (elt class-indices one-class) one-rule))
+	    (incf (elt votecounts one-class)))))))
 
 (defmethod get-consensus ((tm tm) votelist)
   ;; Returns random class among those who have the most votes.
@@ -187,15 +223,20 @@
 	(1- range)
 	num)))
 
-(defun print-feedback (feature-num feature-present clause-polarity rule-num probability feedback-polarity feedback-success initial-clause-mem &optional roll clause-at-limit)
+(defun print-feedback (feature-num feature-present rule-return-true clause-polarity probability feedback-polarity feedback-success initial-clause-mem &optional roll clause-at-limit)
   ;; Prints explanatory details about given feedback based on a lot of details. Doesn't do any of the actual feedback itself.
-  (format t "Feature ~a was ~a in the input, so the corresponding ~a clause in rule ~a may be ~a with prob. ~a.~%"
+  ; TODO: Make this able to calculate more on its own so it can take in less arguments.
+  (if (not rule-return-true)
+      (format t "The rule returned false on the input, so the corresponding ~a class in the rule may be ~a with prob. ~a.~%"
+	      (if clause-polarity "positive" "negative")
+	      (if feedback-polarity "rewarded" "penalized")
+	      (write-to-string probability))
+      (format t "Feature ~a was ~a in the input, and the rule returned true, so the corresponding ~a clause in the rule may be ~a with prob. ~a.~%"
 	  (write-to-string feature-num)
 	  (if feature-present "present" "absent")
 	  (if clause-polarity "positive" "negative")
-	  (write-to-string rule-num)
 	  (if feedback-polarity "rewarded" "penalized")
-	  (write-to-string probability))
+	  (write-to-string probability)))
   (if clause-at-limit
       (format t "The clause was already at its ~a value, ~a, so no change was made.~%"
 	      (if feedback-polarity "maximum" "minimum")
@@ -216,71 +257,110 @@
 			 (1+ initial-clause-mem)
 			 (1- initial-clause-mem)))))))
   (format t "~%"))
-  
 
-(defmethod give-feedback ((tm tm) input-label input &optional v spec boost-positive)
+(defun print-feedback-type2 (feature-num feature-present clause-polarity initial-clause-mem mem-threshold)
+  (format t "Feature ~a was ~a in the input, so the corresponding ~a clause may be rewarded.~%"
+	  (write-to-string feature-num)
+	  (if feature-present "present" "absent")
+	  (if clause-polarity "positive" "negative"))
+  (if (> initial-clause-mem mem-threshold)
+      (format t "The clause was already memorized, so it was not rewarded.~%")
+      (format t "The clause was rewarded, and its value was moved from ~a to ~a.~%"
+	      (write-to-string initial-clause-mem)
+	      (write-to-string (1+ initial-clause-mem)))))
+
+(defmacro give-one-feedback (feature-index roll side polarity max-value boost-positive)
+  `(when (if ,side (if ,boost-positive t (>= ,roll 1)) (< ,roll 1))
+       (if (and ,polarity
+		(< (elt (mem rule) ,feature-index) ,max-value))
+	   (incf (elt (mem rule) ,feature-index)))
+       (if (and (not ,polarity)
+		(> (elt (mem rule) ,feature-index) 1))
+	   (decf (elt (mem rule) ,feature-index)))))
+
+(defmethod type-i-feedback ((rule rule) input rule-response spec &optional v boost-positive)
+  ;; Gives Type I feedback to a rule based on a given labeled input.
+  (let ((max-state (* 2 (num-states rule)))
+	(high-probability (/ (1- spec) spec))
+	(low-probability (/ 1 spec)))
+    (dotimes (positive-feature (num-features rule))
+      (let* ((roll-positive (random spec))
+	    (roll-negative (random spec))
+	    (negative-feature (+ positive-feature (num-features rule)))
+	    (init-positive-state (elt (mem rule) positive-feature))
+	    (init-negative-state (elt (mem rule) negative-feature)))
+	(if rule-response
+	    (if (equal (elt input positive-feature) 1)
+		; rule returned true and feature is present, so reward positive clause with (s-1)/s probability, and penalize negative clause with 1/s probability
+		(progn
+		  (when v
+		    ; print feedback
+		    (print-feedback positive-feature t t t high-probability t (>= roll-positive 1) init-positive-state roll-positive (equal init-positive-state max-state))
+		    (print-feedback positive-feature t t nil low-probability nil (< roll-negative 1) init-negative-state roll-negative (equal init-negative-state 1)))
+		  ; give feedback
+		  (give-one-feedback positive-feature roll-positive t t max-state boost-positive)
+		  (give-one-feedback negative-feature roll-negative nil nil max-state boost-positive))
+
+		; rule returned true and feature is absent, so reward negative clause with (s-1)/s probability, and penalize positive clause with 1/s probability
+		  (progn
+		    (when v
+		      (print-feedback positive-feature nil t t low-probability nil (< roll-positive 1) init-positive-state roll-positive (equal init-positive-state 1))
+		      (print-feedback positive-feature nil t nil high-probability t (>= roll-negative 1) init-negative-state roll-negative (equal init-negative-state max-state)))
+		    (give-one-feedback positive-feature roll-positive nil nil max-state boost-positive)
+		    (give-one-feedback negative-feature roll-negative t t max-state boost-positive)))
+	    ; rule returned false, so penalize both positive and negative features with 1/s probability
+		(progn
+		  (when v
+		    (print-feedback positive-feature t nil t low-probability nil (< roll-positive 1) init-positive-state roll-positive (equal init-positive-state 1))
+		    (print-feedback positive-feature t nil nil low-probability nil (< roll-negative 1) init-negative-state roll-negative (equal init-negative-state 1)))
+	      (give-one-feedback positive-feature roll-positive nil nil max-state boost-positive)
+	      (give-one-feedback negative-feature roll-negative nil nil max-state boost-positive)))))))
+
+(defmethod type-ii-feedback ((rule rule) input rule-response &optional v)
+  ;; Gives Type II feedback. Rewards all features which are absent if the rule returns true.
+  (if rule-response
+      (let ((mem-threshold (num-states rule)))
+	(dotimes (positive-feature (num-features rule))
+	  (let ((negative-feature (+ positive-feature (num-features rule))))
+	    (if (not (elt input positive-feature))
+		(progn
+		  (if v
+		      (print-feedback-type2 positive-feature nil t (elt (mem rule) positive-feature) mem-threshold))
+		  (if (< (elt (mem rule) positive-feature) mem-threshold)
+		      (incf (elt (mem rule) positive-feature))))
+		(progn
+		  (if v
+		      (print-feedback-type2 positive-feature t nil (elt (mem rule) negative-feature) mem-threshold))
+		  (if (< (elt (mem rule) negative-feature) mem-threshold)
+		      (incf (elt (mem rule) negative-feature))))))))))
+
+(defmethod give-feedback ((tm tm) input-label input votelist &optional spec v boost-positive target-margin)
   ;; Gives feedback to a Tsetlin machine based on a given labeled input. Many of the machine's rules will have their memory values modified.
   (let* ((counterexample-class (random-exclude (num-classes tm) input-label))
 	 (label-rules (get-class-rules tm input-label))
 	 (counterexample-rules (get-class-rules tm counterexample-class))
 	 (label-lowest-index (elt (class-indices tm) input-label))
-	 (counterex-lowest-index (elt (class-indices tm) counterexample-class)))
+	 (counterex-lowest-index (elt (class-indices tm) counterexample-class))
+	 (input-to-process (if (equal (type-of input) `(vector t ,(length input))) (elt input (random (length input))) input))
+	 (votecounts (count-votes tm votelist)))
     (if (not spec)
 	(setf spec (def-spec tm))) ; temporary
-				       ; type 1 feedback, part 1
-    ; if a feature is present in the input, we loop through every rule matching the input's labelled class, and reward that feature's clauses with probability (s-1)/s
+    ; give type i feedback to rules of the correct class
     (dotimes (label-rule (length label-rules))
-      (dotimes (feature (num-features tm))
-	; set rand equal to random number in [0, specificity-1]. if we roll 0, then things with probability 1/s will happen. if we roll anything else, things with probability (s-1)/s will happen
-	(let ((rand (random spec))
-	      (init-clause-mem (elt (mem (elt label-rules label-rule)) feature))
-	      (init-negative-mem (elt (mem (elt label-rules label-rule)) (+ feature (num-features tm)))))
-	  (if (equal (elt input feature) 1)
-	      ; for each feature which is present in the input
-	      (progn
-		(if v
-		    ; dont worry about it lol
-		    (print-feedback feature t t (+ label-rule label-lowest-index) (if boost-positive 1 (/ (1- spec) spec)) t (not (equal rand 0)) init-clause-mem (if (not boost-positive) rand) (>= init-clause-mem (* 2 (num-states tm)))))
-		; reward with probability 1 if boost-positive is true. otherwise, reward with probability (s-1)/s, so do it if rand is not 0
-		(if (or boost-positive (not (equal rand 0)))
-		    (if (< init-clause-mem (* 2 (num-states tm)))
-			(incf (elt (mem (elt label-rules label-rule)) feature))))
-		; penalize the corresponding negative clause with probability 1 (type 2 feedback)
-		(if v
-		    (print-feedback feature t nil (+ label-rule label-lowest-index) 1 nil t init-negative-mem nil (<= init-negative-mem 1)))
-		(if (> init-negative-mem 1)
-		    (decf (elt (mem (elt label-rules label-rule)) (+ feature (num-features tm))))))
-	  ; for each feature which is absent in the input. this is the "else" in (if (elt input feature)) above if you're confused where we are
-	      (progn
-		(if v
-		    (print-feedback feature nil t (+ label-rule label-lowest-index) (/ 1 spec) nil (equal rand 0) init-clause-mem rand (<= init-clause-mem 1))
-		(if (equal rand 0)
-		    (if (> init-clause-mem 1)
-			(decf (elt (mem (elt label-rules label-rule)) feature))))))))))
-    ; the second loop, for the counterexample class. this class is one of the non-present ones, which is randomly selected
+      (let ((label-rule-index (+ label-lowest-index label-rule)))
+	(if (or (not target-margin)
+		(> (random 1.0) (/
+				 (+ target-margin (elt votecounts input-label) (* -1 (elt votecounts counterexample-class)))
+				 (* 2 target-margin))))
+	    (type-i-feedback (elt label-rules label-rule) input-to-process (elt votelist label-rule-index) spec v boost-positive))))
+    ; give type ii feedback to rules of the counterexample class
     (dotimes (counter-rule (length counterexample-rules))
-      (dotimes (feature (num-features tm))
-	(let ((rand (random spec))
-	      (init-clause-mem (elt (mem (elt counterexample-rules counter-rule)) feature))
-	      (init-negative-mem (elt (mem (elt counterexample-rules counter-rule)) (+ feature (num-features tm)))))
-	  (if (equal (elt input feature) 1)
-	      ; for each feature which is present in the input, (n-1)/n chance to reward the corresponding negative clause in the counterexample class
-	      (progn
-		(if v
-		    (print-feedback feature t nil (+ counterex-lowest-index counter-rule) (/ (1- spec) spec) t (not (equal rand 0)) init-negative-mem rand (>= init-negative-mem (* 2 (num-states tm)))))
-		(if (and (not (equal rand 0)) (< init-negative-mem (* 2 (num-states tm))))
-		    (incf (elt (mem (elt counterexample-rules counter-rule)) (+ feature (num-features tm)))))
-		; for each feature which is present in the input, guaranteed penalty for matching positive clauses in the counterexample class
-		(if v
-		    (print-feedback feature t t (+ counterex-lowest-index counter-rule) 1 nil t init-clause-mem nil (<= init-clause-mem 1)))
-		(if (> init-clause-mem 1)
-		    (decf (elt (mem (elt counterexample-rules counter-rule)) feature))))
-	      ; for each feature which is absent in the input, 1/n chance to penalize the corresponding negative clause in the counterexample class
-	      (progn
-		(if v
-		    (print-feedback feature nil nil (+ counterex-lowest-index counter-rule) (/ 1 spec) nil (equal rand 0) init-negative-mem rand (<= init-negative-mem 1)))
-		(if (and (equal rand 0) (> init-negative-mem 1))
-		    (decf (elt (mem (elt counterexample-rules counter-rule)) (+ feature (num-features tm))))))))))))
+      (let ((counter-rule-index (+ counterex-lowest-index counter-rule)))
+	(if (or (not target-margin)
+		(> (random 1.0) (/
+				 (+ target-margin (elt votecounts input-label) (* -1 (elt votecounts counterexample-class)))
+				 (* 2 target-margin))))
+	    (type-ii-feedback (elt counterexample-rules counter-rule) input-to-process (elt votelist counter-rule-index) v))))))
 
 (defun format-leading-zeroes (num max)
   ;; Turns num into a string, and adds leading zeroes to it to make it the same length as max.
@@ -297,7 +377,7 @@
 	(concatenate 'string (write-to-string s) "s")
 	(concatenate 'string (write-to-string (* 1000 s)) "ms"))))
 
-(defmethod one-epoch ((tm tm) input-labels input-data epoch-num epochs start-index num-examples inv-accuracy-sample-rate &optional v spec boost-positive (bar-appearance "....................") (epoch-starting-time (get-internal-real-time)) no-feedback)
+(defmethod one-epoch ((tm tm) input-labels input-data epoch-num epochs start-index num-examples inv-accuracy-sample-rate &optional v spec boost-positive target-margin (bar-appearance "....................") (epoch-starting-time (get-internal-real-time)) no-feedback)
   ;; Handles a single training epoch. This isn't much more complicated than running give-feedback on every example, so most of the code here is dedicated to print statements.
   (let ((epoch-correct-answers 0)
 	(examples-per-char (max (floor (/ num-examples (length bar-appearance))) 1)))
@@ -305,9 +385,10 @@
     (if (equal v 1)
 	(format t "Epoch ~a/~a: [" (format-leading-zeroes (+ 1 epoch-num) epochs) epochs))
     (dotimes (example num-examples)
-      (let ((example-index (+ start-index example)))
+      (let* ((example-index (+ start-index example))
+	    (example-votelist (eval-tm tm (elt input-data example-index))))
 	(if (not no-feedback)
-	    (give-feedback tm (elt input-labels example-index) (elt input-data example-index) nil spec boost-positive))
+	    (give-feedback tm (elt input-labels example-index) (elt input-data example-index) example-votelist nil spec boost-positive target-margin))
 	(if (> v 0)
 	    (progn
 	      (if (equal (mod example inv-accuracy-sample-rate) 0)
@@ -326,13 +407,13 @@
 		(format-time (- (get-internal-real-time) epoch-starting-time))))
     (if (>= v 1) (format t "~%"))))
     
-(defmethod train ((tm tm) input-labels input-data epochs &optional v spec boost-positive (bar-appearance "...................."))
+(defmethod train ((tm tm) input-labels input-data epochs &optional v spec boost-positive target-margin (bar-appearance "...................."))
   ;; Runs add-feedback on tm for every input in the labels and data. Setting v to true adds helpful accuracy and time trackers.
   (let* ((examples-per-epoch (floor (/ (length input-labels) epochs)))
 	(overall-starting-time (get-internal-real-time))
 	(inv-accuracy-sample-rate (ceiling (/ examples-per-epoch 500))))
     (dotimes (epoch epochs)
-      (one-epoch tm input-labels input-data epoch epochs (* epoch examples-per-epoch) examples-per-epoch inv-accuracy-sample-rate (if v 1) spec boost-positive bar-appearance))
+      (one-epoch tm input-labels input-data epoch epochs (* epoch examples-per-epoch) examples-per-epoch inv-accuracy-sample-rate (if v 1) spec boost-positive target-margin bar-appearance))
     (if v
 	(format t "~%~a examples in ~a"
 		(write-to-string (* examples-per-epoch epochs))
@@ -359,7 +440,6 @@
 		(write-to-string (* (+ testing-per-epoch training-per-epoch) epochs))
 		(format-time (- (get-internal-real-time) overall-starting-time))))))
 	
-
 (defun default-feature-gen (num-features)
   ;; Generates a random bit vector with length num-features, representing a single example.
   (let ((features (make-sequence '(vector bit) num-features :initial-element 0)))
@@ -388,18 +468,6 @@
 	    (elt label-vector (+ one-data starting-index))
 	    (elt data-vector (+ one-data starting-index)))))
 
-(defun print-data-rectangle (label-vector data-vector &optional num-data width (starting-index 0))
-  (let* ((size (length (elt data-vector 0)))
-	 (width (if (not width) (floor (sqrt size)) width))
-	 (height (floor (/ size width)))
-	 (num-data (min (length data-vector) (if num-data num-data 10))))
-    (dotimes (one-example num-data)
-      (dotimes (line height)
-	(format t "~%")
-	(dotimes (one-bit width)
-	  (format t (if (= 1 (elt (elt data-vector (+ starting-index one-example)) (+ (* width line) one-bit))) "#" "."))))
-      (format t " (~a)~%~%" (write-to-string (elt label-vector (+ starting-index one-example)))))))
-
 (defun to-base-list (num base-list)
   ;; Converts a number to a specified base list. For instance, (to-base-list (35 '(5 4 3))) will return (2 3 2), because 2*(4*3) + 3*(3) + 2 = 35.
   (if (not (cdr base-list)) (list num)
@@ -415,7 +483,7 @@
   ;; Takes in a single bit vector representing an image (or higher-dimensional input), and outputs a vector of bit vectors representing smaller sections within that image.
   (let* ((conv-radius (/ 1 convs-per-dimension))
 	 (num-dimensions (length dimensions))
-	 (grains-per-dimension (1+ (* (1- convs-per-dimension) granularity))) ; a "grain" is a starting point in space for an output to be created. in other words, for every grain, there will be an output created. by default, you get convs-per-dimension ^ num-dimensions grains, but this can be increased by increasing granularity.
+	 (grains-per-dimension (1+ (* (1- (ceiling convs-per-dimension)) granularity))) ; a "grain" is a starting point in space for an output to be created. in other words, for every grain, there will be an output created. by default, you get convs-per-dimension ^ num-dimensions grains, but this can be increased by increasing granularity.
 	 (output-length (expt grains-per-dimension num-dimensions))
 	 (output (make-array output-length :fill-pointer 0))
 	 (bit-radius-dimensions (loop for dim below num-dimensions collect (floor (* (elt dimensions dim) conv-radius)))) ; dimensions of each output
@@ -450,3 +518,8 @@
 						      (if (= (mod i 10000) 0)
 							  (format t "~a elements left.~%" (write-to-string i)))))
     (list first-seq second-seq)))
+
+(defun second-highest-factor (number)
+  ;; Returns the highest factor of a number which is less than or equal to its square root. Should definitely use downto instead of reduce max but I don't care to fix it now.
+  (reduce #'max (loop for i upto (1- (sqrt number)) collect (if (equal (mod number (1+ i)) 0) (1+ i) 0))))
+    
