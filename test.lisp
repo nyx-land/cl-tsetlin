@@ -1,4 +1,3 @@
-
 (defun xor-categorizer (data)
   ;; Returns 1 if exactly one of the two features is present, and 0 otherwise.
   (if (equal (elt data 0) (elt data 1)) 0 1))
@@ -35,6 +34,56 @@
 	(if (and (equal f (1- num-features)) (equal (elt output 0) 1) (> proximity 0.5))
 	    (setf (elt output f) 0))))))
 
+(defun circlecross-categorizer (data)
+  ;; Returns 1 if three features in a row are present, and 0 otherwise.
+  (dotimes (one-bit (- (length data) 2) 0)
+    ; O(n) = 3n lol
+    (if (and (equal (elt data one-bit) 1) (equal (elt data (1+ one-bit)) 1) (equal (elt data (+ 2 one-bit)) 1))
+	(return-from circlecross-categorizer 1))))
+
+(defun circlecross-generator (num-features)
+  (let* ((output (make-sequence '(vector bit) num-features :initial-element 0))
+	(height (second-highest-factor num-features))
+	(width (/ num-features height)))
+    (if (or (< height 3) (< width 3))
+	(error "I can't make a rectangle with this shit.~%Go find two whole numbers greater than 2 which go into ~S.~%Yeah, that's what I thought." num-features))
+    (let ((center-coords (list (1+ (random (- height 2))) (1+ (random (- width 2)))))
+	  (is-cross (if (> (random 2) 0) t nil)))
+      (if is-cross
+	  (setf (elt output (from-base-list center-coords (list height width))) 1))
+      (progn
+	; i know this sucks but dont care
+	(setf (elt output (from-base-list (list (1- (elt center-coords 0)) (elt center-coords 1)) (list height width))) 1)
+	(setf (elt output (from-base-list (list (1+ (elt center-coords 0)) (elt center-coords 1)) (list height width))) 1)
+	(setf (elt output (from-base-list (list (elt center-coords 0) (1+ (elt center-coords 1))) (list height width))) 1)
+	(setf (elt output (from-base-list (list (elt center-coords 0) (1- (elt center-coords 1))) (list height width))) 1))
+      output)))
+
+(defun 2d-xor-generator (num-features &optional width)
+  (let ((output (make-sequence '(vector bit) num-features)) (config (random 4)) (criticals (list 0 0 0 0)) (width (if (not width) (floor (sqrt num-features)))))
+    (dotimes (feature num-features) (setf (elt output feature) (random 2)))
+    (cond ((= config 0)
+	   (setf criticals (list 1 1 0 0)))
+	  ((= config 1)
+	   (setf criticals (list 0 0 1 1)))
+	  ((= config 2)
+	   (setf criticals (list 0 1 1 0)))
+	  ((= config 3)
+	   (setf criticals (list 1 0 0 1))))
+    (progn
+      (setf (elt output 0) (elt criticals 0))
+      (setf (elt output 1) (elt criticals 1))
+      (setf (elt output width) (elt criticals 2))
+      (setf (elt output (1+ width)) (elt criticals 3)))
+    output))
+    
+(defun 2d-xor-categorizer (input)
+  (if (= (elt input 0) (elt input 1)) 0 1))
+
+(defun noisemaker (labels-list noise-ratio &optional (num-classes 2))
+  (dotimes (label (length labels-list) labels-list)
+    (if (< (random 1.0) noise-ratio)
+	(setf (elt labels-list label) (random num-classes)))))
 ; i have to define these here or the compiler gets mad it doesn't even stop the compilation it just gives me warnings and i don't like warnings
 (progn
   (defparameter xor-tm nil)
@@ -53,7 +102,18 @@
   (defparameter outputs-per-convolution nil)
   (defparameter mnist-conv-tm nil)
   (defparameter mnist-conv-labels nil)
-  (defparameter mnist-conv-images nil))
+  (defparameter mnist-conv-images nil)
+  (defparameter circlecross-tm nil)
+  (defparameter circlecross-data nil)
+  (defparameter circlecross-conv-tm nil)
+  (defparameter circlecross-conv-labels nil)
+  (defparameter circlecross-conv-images nil)
+  (defparameter noisy-xor-data nil)
+  (defparameter noisy-xor-labels nil)
+  (defparameter noisy-xor-images nil)
+  (defparameter noisy-xor-conv-imgs nil)
+  (defparameter noisy-xor-tm nil)
+  (defparameter noisy-xor-conv-tm nil))
 
 (defun run-xor-test ()
   ;; Runs the xor test. Uses defparameter so the user can play with the machine and data afterward if they want.
@@ -133,21 +193,73 @@
 
 (defun run-mnist-conv-test (labels-filename images-filename)
   ;; Runs the MNIST handwritten digits test, but with convolution added. Currently scores slightly higher than random.
-  (defparameter convs-per-dimension 3)
+  (defparameter convs-per-dimension 2)
   (defparameter granularity 2)
-  (defparameter outputs-per-convolution (expt (1+ (* (1- convs-per-dimension) granularity)) 2))
+  (defparameter outputs-per-convolution (expt (1+ (* (1- convs-per-dimension) granularity)) 2)) ; todo: change this fucking variable, its only purpose is to determine the size of the thermometer and it isn't even good at doing that
   (defparameter mnist-labels (labels-file-to-array labels-filename))
   (defparameter mnist-images (images-file-to-array images-filename))
-  (defparameter mnist-conv-labels (make-array (* outputs-per-convolution (length mnist-labels)) :fill-pointer 0))
-  (defparameter mnist-conv-images (make-array (* outputs-per-convolution (length mnist-images)) :fill-pointer 0))
+  (defparameter mnist-conv-labels (make-array (length mnist-labels) :fill-pointer 0))
+  (defparameter mnist-conv-images (make-array (length mnist-images) :fill-pointer 0))
   (defparameter mnist-conv-tm (make-instance 'tm
 					     :num-rules 40
 					     :num-features (floor (+ (expt (floor (/ 28 convs-per-dimension)) 2) (* 2 (1- (sqrt outputs-per-convolution)))))
 					     :num-classes 10
-					     :def-spec 10))
+					     :def-spec 5))
   (dotimes (one-image (length mnist-images))
-    (let ((conv-vector (convolution (elt mnist-images one-image) '(28 28) 3 2)))
-      (dotimes (one-output outputs-per-convolution)
-	(vector-push (elt mnist-labels one-image) mnist-conv-labels)
-	(vector-push (elt conv-vector one-output) mnist-conv-images))))
+    (let ((conv-vector (convolution (elt mnist-images one-image) '(28 28) convs-per-dimension granularity)))
+      (vector-push (elt mnist-labels one-image) mnist-conv-labels)
+      (vector-push conv-vector mnist-conv-images)))
   (train mnist-conv-tm mnist-conv-labels mnist-conv-images 10 t))
+
+(defun run-circlecross-test ()
+  (let ((num-features 25) (data-size 5000))
+    (defparameter circlecross-data (generate-data data-size num-features #'circlecross-categorizer #'circlecross-generator))
+    (defparameter circlecross-tm (make-instance 'tm
+						:num-rules 60
+						:num-features num-features
+						:num-classes 2
+						:class-names #("Circle" "Cross")
+						:def-spec 5))
+    (train circlecross-tm (elt circlecross-data 0) (elt circlecross-data 1) 10 t)))
+
+(defun run-circlecross-conv-test ()
+    (let* ((num-features 25) (data-size 50000) (cvd 2) (gran 1))
+    (defparameter circlecross-data (generate-data data-size num-features #'circlecross-categorizer #'circlecross-generator))
+    (defparameter circlecross-conv-labels (elt circlecross-data 0))
+    (defparameter circlecross-conv-images (make-array data-size :fill-pointer 0))
+    (dotimes (one-image data-size)
+      (vector-push (convolution
+		    (elt (elt circlecross-data 1) one-image)
+		    (list (/ num-features (second-highest-factor num-features)) (second-highest-factor num-features))
+		    cvd
+		    gran)
+		   circlecross-conv-images))
+    (defparameter circlecross-conv-tm (make-instance 'tm
+						:num-rules 60
+						:num-features (+ (expt (floor (/ (sqrt num-features) cvd)) 2) (* 2 (ceiling (+ cvd gran -2))))
+						:num-classes 2
+						:class-names #("Circle" "Cross")
+						:def-spec 15))
+    (train circlecross-conv-tm (elt circlecross-data 0) (elt circlecross-data 1) 10 t nil nil 10)))
+
+(defun run-noisy-xor-test (&optional (noise-ratio 0.4))
+  (let ((data-size 50000) (num-features 9) (width 3))
+    (defparameter noisy-xor-data (generate-data data-size num-features #'2d-xor-categorizer #'2d-xor-generator))
+    (defparameter noisy-xor-labels (noisemaker (elt noisy-xor-data 0) noise-ratio))
+    (defparameter noisy-xor-images (elt noisy-xor-data 1))
+    (defparameter noisy-xor-conv-imgs (map 'vector #'convolution noisy-xor-images (make-array data-size :initial-element (list width (/ num-features width)))))
+    (defparameter noisy-xor-tm (make-instance 'tm
+					      :num-rules 20
+					      :num-features num-features
+					      :num-classes 2
+					      :class-names #("Horizontal" "Slash")
+					      :def-spec 5))
+    (defparameter noisy-xor-conv-tm (make-instance 'tm
+						   :num-rules 20
+						   :num-features (length (elt (elt noisy-xor-conv-imgs 0) 0))
+						   :num-classes 2
+						   :class-names #("Horizontal" "Slash")
+						   :def-spec 5))
+    (train noisy-xor-tm noisy-xor-labels noisy-xor-images 10 t nil nil 2)
+    (format t "~%~%")
+    (train noisy-xor-conv-tm noisy-xor-labels noisy-xor-conv-imgs 10 t)))
