@@ -1,3 +1,5 @@
+(in-package :cl-tsetlin)
+
 (defclass rule (standard-object)
   ((num-features
     :initarg :num-features
