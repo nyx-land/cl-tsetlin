@@ -1,26 +1,59 @@
 (defclass rule (standard-object)
-  ((num-features :initarg :num-features :initform (error "num-features not specified. Are you stupid?") :accessor num-features
-		 :documentation "Number of true-false features that this rule will be able to observe. Should be a positive integer.")
-   (num-states :initarg :num-states :initform 5 :accessor num-states
-	       :documentation "Number of possible memory states per overall position (memorized/forgotten). Total number of states will be twice this value.")
-   (class-id :initarg :class-id :initform (error "class id not specified. Are you stupid?") :accessor class-id
-	     :documentation "The ID of the class this rule is trying to observe. Should be an integer 0 or higher.")
-   (feature-names :initarg :feature-names :initform NIL :accessor feature-names
-		  :documentation "List of feature names, which get assigned in order. The list's length must be equal to num-features. Optional.")
-   (cname :initarg :cname :initform NIL :accessor cname
-	  :documentation "The name of the class this rule is trying to observe. Should be a string. Not mandatory.")
-   (memory :initarg :mem :initform NIL :accessor mem
-	       :documentation "Memory values of the rule's feature clauses. Should be handled by initialize-instance, but can be overridden by an initial value. Should be a collection of ints.")))
+  ((num-features
+    :initarg :num-features
+    :initform (error "num-features not specified. Are you stupid?")
+    :accessor num-features
+    :documentation "Number of true-false features that this rule will be able to
+observe. Should be a positive integer.")
+   (num-states
+    :initarg :num-states
+    :initform 5
+    :accessor num-states
+    :documentation "Number of possible memory states per overall
+position (memorized/forgotten). Total number of states will be twice
+this value.")
+   (class-id
+    :initarg :class-id
+    :initform (error "class id not specified. Are you stupid?")
+    :accessor class-id
+    :documentation "The ID of the class this rule is trying to observe. Should be an
+integer 0 or higher.")
+   (feature-names
+    :initarg :feature-names
+    :initform NIL
+    :accessor feature-names
+    :documentation "List of feature names, which get assigned in order. The list's length
+must be equal to num-features. Optional.")
+   (cname
+    :initarg :cname
+    :initform NIL
+    :accessor cname
+    :documentation "The name of the class this rule is trying to observe. Should be a
+string. Not mandatory.")
+   (memory
+    :initarg :mem
+    :initform NIL
+    :accessor mem
+    :documentation "Memory values of the rule's feature clauses. Should be handled by
+initialize-instance, but can be overridden by an initial value. Should
+be a collection of ints.")))
 
 (defmethod initialize-instance :after ((rule rule) &key)
 					; set up mem values
   (if (not (mem rule))
-      (setf (mem rule) (make-array (* 2 (num-features rule)) :initial-element (num-states rule))))) ; initialize all values to num-states, so barely forgotten
+      (setf (mem rule)
+            (make-array (* 2 (num-features rule))
+                        ; initialize all values to num-states, so
+                        ; barely forgotten
+                        :initial-element (num-states rule))))) 
 
 (defmethod print-rule ((rule rule) &optional (clauses-per-line 5))
   ;; Prints a rule's memory values in human-readable format.
   (format t "This rule is for class ~a. It has ~a features.~%~%"
-	  (if (cname rule) (concatenate 'string (write-to-string (class-id rule)) ": " (cname rule)) (class-id rule))
+	  (if (cname rule)
+              (concatenate 'string (write-to-string (class-id rule)) ": "
+                           (cname rule))
+              (class-id rule))
 	  (num-features rule))
   (let ((memorized-clauses NIL))
     ; collect the feature-names for the clauses which have been memorized. these clauses must be true in order for the rule to evaluate as true
