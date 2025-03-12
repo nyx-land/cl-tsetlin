@@ -135,26 +135,67 @@ be a collection of ints.")))
 
 (defclass tm (standard-object)
   ;; Tsetlin machine class, which contains several rules meant to categorize inputs.
-  ((num-classes :initarg :num-classes :initform (error "num-classes not specified. Are you stupid?") :accessor num-classes
-		:documentation "Number of distinct classes that this Tsetlin machine will be able to observe. Should be a positive integer.")
-   (num-states :initarg :num-states :initform 5 :accessor num-states
-	       :documentation "Number of possible memory states per overall position (memorized/forgotten) in this Tsetlin machine's rules. Total number of states will be twice this value.")
-   (num-features :initarg :num-features :initform (error "num-features not specified. Are you stupid?") :accessor num-features
-		 :documentation "Number of true-false features that this Tsetlin machine will be able to observe. Should be a positive integer.")
-   (def-spec :initarg :def-spec :initform 3 :accessor def-spec
-			:documentation "Default specificity, or inverse feedback rate, of this machine. If specified, should be at least 1.")
-   (num-rules :initarg :num-rules :initform NIL :accessor num-rules
-	      :documentation "Number of rules in the Tsetlin machine. Should be a positive integer. If unspecified, defaults to num-classes.")
-   (rules-per-class :initarg :rules-per-class :initform NIL :accessor rules-per-class
-		    :documentation "Collection of integers describing how many rules will cover each class. If unspecified, the rules are divided equally.")
-   (class-indices :initform NIL :accessor class-indices
-		  :documentation "Vector of indices for where in the rules list each class is. Automatically set in initialize-instance.")
-   (class-names :initarg :class-names :initform NIL :accessor class-names
-		:documentation "List of class names, which get assigned in order. The list's length must be equal to num-classes. Optional to include.")
-   (feature-names :initarg :feature-names :initform NIL :accessor feature-names
-		  :documentation "List of feature names, which get assigned in order. The list's length must be equal to num-features. Optional.")
-   (rules :initarg :rules :initform NIL :accessor rules
-	  :documentation "Rules data of this Tsetlin machine. Can be set to an initial value if you really want, but in most cases initialize-instance should handle this.")))
+  ((num-classes
+    :initarg :num-classes
+    :initform (error "num-classes not specified. Are you stupid?")
+    :accessor num-classes
+    :documentation "Number of distinct classes that this Tsetlin machine will be able to
+observe. Should be a positive integer.")
+   (num-states
+    :initarg :num-states
+    :initform 5
+    :accessor num-states
+    :documentation "Number of possible memory states per overall
+position (memorized/forgotten) in this Tsetlin machine's rules. Total
+number of states will be twice this value.")
+   (num-features
+    :initarg :num-features
+    :initform (error "num-features not specified. Are you stupid?")
+    :accessor num-features
+    :documentation "Number of true-false features that this Tsetlin machine will be able
+to observe. Should be a positive integer.")
+   (def-spec
+    :initarg :def-spec
+    :initform 3
+    :accessor def-spec
+    :documentation "Default specificity, or inverse feedback rate, of this machine. If
+specified, should be at least 1.")
+   (num-rules
+    :initarg :num-rules
+    :initform NIL
+    :accessor num-rules
+    :documentation "Number of rules in the Tsetlin machine. Should be a positive
+integer. If unspecified, defaults to num-classes.")
+   (rules-per-class
+    :initarg :rules-per-class
+    :initform NIL
+    :accessor rules-per-class
+    :documentation "Collection of integers describing how many rules will cover each
+class. If unspecified, the rules are divided equally.")
+   (class-indices
+    :initform NIL
+    :accessor class-indices
+    :documentation "Vector of indices for where in the rules list each class
+is. Automatically set in initialize-instance.")
+   (class-names
+    :initarg :class-names
+    :initform NIL
+    :accessor class-names
+    :documentation "List of class names, which get assigned in order. The list's length
+must be equal to num-classes. Optional to include.")
+   (feature-names
+    :initarg :feature-names
+    :initform NIL
+    :accessor feature-names
+    :documentation "List of feature names, which get assigned in order. The list's length
+must be equal to num-features. Optional.")
+   (rules
+    :initarg :rules
+    :initform NIL
+    :accessor rules
+    :documentation "Rules data of this Tsetlin machine. Can be set to an initial value if
+you really want, but in most cases initialize-instance should handle
+this.")))
 
 (defmethod print-tm ((tm tm) pretty)
   ; Prints the entire Tsetlin machine, using either pretty-print-memory or print-rule.
