@@ -1,5 +1,54 @@
 (in-package :cl-tsetlin)
 
+(defclass machine-meta (standard-class) ()
+  (:documentation "The metaclass for fancy MOP extensions."))
+
+(defmethod validate-superclass  
+    ((class machine-meta) (super standard-class))  
+  t)
+
+(defgeneric memorization (old new)
+  (:documentation "Describe how to memorize something when a slot with the `MEMORIZE'
+option is set."))
+
+(defclass memorizer-direct-slot-definition
+    (standard-direct-slot-definition)
+  ((memorize
+    :initarg :memorize
+    :initform nil
+    :documentation "A slot that memorizes its inputs.")))
+
+(defclass memorizer-effective-slot-definition
+    (standard-effective-slot-definition)
+  ((memorize
+    :initarg :memorize
+    :initform nil)))
+
+(defmethod direct-slot-definition-class
+    ((class machine-meta) &key memorize &allow-other-keys)
+  (if memorize
+      'memorizer-direct-slot-definition
+      (call-next-method)))
+
+(defmethod effective-slot-definition-class
+    ((class machine-meta) &rest initargs)
+  'memorizer-effective-slot-definition)
+
+(defmethod compute-effective-slot-definition
+    ((class machine-meta) name direct-slots)
+  (let ((effective-slot (call-next-method)))
+    (when (some (lambda (ds)
+                  (typep ds 'memorizer-direct-slot-definition))
+                direct-slots)
+      (setf (slot-value effective-slot 'memorize) t))
+    effective-slot))
+
+(defmethod (setf slot-value-using-class) :around
+    (new-value class object (slot memorizer-effective-slot-definition))
+  (when (slot-value slot 'memorize)
+    ;; this needs to do something
+    (values)))
+
 (defclass rule (standard-object)
   ((num-features
     :initarg :num-features
